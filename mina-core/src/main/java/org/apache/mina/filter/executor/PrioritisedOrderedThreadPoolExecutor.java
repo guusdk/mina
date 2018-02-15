@@ -64,7 +64,7 @@ public class PrioritisedOrderedThreadPoolExecutor extends ThreadPoolExecutor
     private static final AttributeKey TASKS_QUEUE = new AttributeKey( PrioritisedOrderedThreadPoolExecutor.class, "tasksQueue");
 
     /** A queue used to store the available sessions */
-    private final BlockingQueue<FIFOEntry> waitingSessions = new PriorityBlockingQueue<>();
+    private final BlockingQueue<FIFOEntry> waitingSessions;
 
     private final Set<Worker> workers = new HashSet<>();
 
@@ -207,6 +207,12 @@ public class PrioritisedOrderedThreadPoolExecutor extends ThreadPoolExecutor
 
         // The comparator can be null.
         this.comparator = comparator;
+
+        if (this.comparator == null) {
+            this.waitingSessions = new LinkedBlockingQueue<>();
+        } else {
+            this.waitingSessions = new PriorityBlockingQueue<>();
+        }
     }
 
     /**
