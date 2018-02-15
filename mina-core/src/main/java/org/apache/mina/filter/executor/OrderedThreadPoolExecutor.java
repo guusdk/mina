@@ -19,36 +19,23 @@
  */
 package org.apache.mina.filter.executor;
 
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Queue;
-import java.util.Set;
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.Executors;
-import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.RejectedExecutionHandler;
-import java.util.concurrent.SynchronousQueue;
-import java.util.concurrent.ThreadFactory;
-import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
-
-import org.apache.mina.core.session.AttributeKey;
-import org.apache.mina.core.session.DummySession;
-import org.apache.mina.core.session.IoEvent;
-import org.apache.mina.core.session.IoSession;
+import org.apache.mina.core.session.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+
 /**
- * A {@link ThreadPoolExecutor} that maintains the order of {@link IoEvent}s.
+ * A {@link ThreadPoolExecutor} that maintains the order of {@link IoEvent}s per session.
+ * <p>
+ * By providing an optional Comparator, this implementation can prioritize sessions.
  * <p>
  * If you don't need to maintain the order of events per session, please use
  * {@link UnorderedThreadPoolExecutor}.
-
+ *
  * @author <a href="http://mina.apache.org">Apache MINA Project</a>
  * @org.apache.xbean.XBean
  */
@@ -65,13 +52,15 @@ public class OrderedThreadPoolExecutor extends ThreadPoolExecutor {
     /** A default value for the KeepAlive delay */
     private static final int DEFAULT_KEEP_ALIVE = 30;
 
-    private static final IoSession EXIT_SIGNAL = new DummySession();
+    private static final AtomicLong SEQ = new AtomicLong(0);
+
+    private static final FIFOEntry EXIT_SIGNAL = new FIFOEntry(new IoEvent(IoEventType.CLOSE, new DummySession(), null), null);
 
     /** A key stored into the session's attribute for the event tasks being queued */
     private static final AttributeKey TASKS_QUEUE = new AttributeKey(OrderedThreadPoolExecutor.class, "tasksQueue");
 
     /** A queue used to store the available sessions */
-    private final BlockingQueue<IoSession> waitingSessions = new LinkedBlockingQueue<>();
+    private final BlockingQueue<FIFOEntry> waitingSessions;
 
     private final Set<Worker> workers = new HashSet<>();
 
@@ -85,6 +74,8 @@ public class OrderedThreadPoolExecutor extends ThreadPoolExecutor {
 
     private final IoEventQueueHandler eventQueueHandler;
 
+    private final Comparator<IoEvent> comparator;
+
     /**
      * Creates a default ThreadPool, with default values :
      * - minimum pool size is 0
@@ -95,7 +86,7 @@ public class OrderedThreadPoolExecutor extends ThreadPoolExecutor {
      */
     public OrderedThreadPoolExecutor() {
         this(DEFAULT_INITIAL_THREAD_POOL_SIZE, DEFAULT_MAX_THREAD_POOL, DEFAULT_KEEP_ALIVE, TimeUnit.SECONDS, Executors
-                .defaultThreadFactory(), null);
+                .defaultThreadFactory(), null, null);
     }
 
     /**
@@ -109,7 +100,7 @@ public class OrderedThreadPoolExecutor extends ThreadPoolExecutor {
      */
     public OrderedThreadPoolExecutor(int maximumPoolSize) {
         this(DEFAULT_INITIAL_THREAD_POOL_SIZE, maximumPoolSize, DEFAULT_KEEP_ALIVE, TimeUnit.SECONDS, Executors
-                .defaultThreadFactory(), null);
+                .defaultThreadFactory(), null, null);
     }
 
     /**
@@ -123,7 +114,7 @@ public class OrderedThreadPoolExecutor extends ThreadPoolExecutor {
      */
     public OrderedThreadPoolExecutor(int corePoolSize, int maximumPoolSize) {
         this(corePoolSize, maximumPoolSize, DEFAULT_KEEP_ALIVE, TimeUnit.SECONDS, Executors.defaultThreadFactory(),
-                null);
+                null, null);
     }
 
     /**
@@ -137,7 +128,7 @@ public class OrderedThreadPoolExecutor extends ThreadPoolExecutor {
      * @param unit Time unit used for the keepAlive value
      */
     public OrderedThreadPoolExecutor(int corePoolSize, int maximumPoolSize, long keepAliveTime, TimeUnit unit) {
-        this(corePoolSize, maximumPoolSize, keepAliveTime, unit, Executors.defaultThreadFactory(), null);
+        this(corePoolSize, maximumPoolSize, keepAliveTime, unit, Executors.defaultThreadFactory(), null, null);
     }
 
     /**
@@ -152,7 +143,7 @@ public class OrderedThreadPoolExecutor extends ThreadPoolExecutor {
      */
     public OrderedThreadPoolExecutor(int corePoolSize, int maximumPoolSize, long keepAliveTime, TimeUnit unit,
             IoEventQueueHandler eventQueueHandler) {
-        this(corePoolSize, maximumPoolSize, keepAliveTime, unit, Executors.defaultThreadFactory(), eventQueueHandler);
+        this(corePoolSize, maximumPoolSize, keepAliveTime, unit, Executors.defaultThreadFactory(), eventQueueHandler, null);
     }
 
     /**
@@ -167,7 +158,22 @@ public class OrderedThreadPoolExecutor extends ThreadPoolExecutor {
      */
     public OrderedThreadPoolExecutor(int corePoolSize, int maximumPoolSize, long keepAliveTime, TimeUnit unit,
             ThreadFactory threadFactory) {
-        this(corePoolSize, maximumPoolSize, keepAliveTime, unit, threadFactory, null);
+        this(corePoolSize, maximumPoolSize, keepAliveTime, unit, threadFactory, null, null);
+    }
+
+    /**
+     * Creates a new instance of a OrderedThreadPoolExecutor.
+     *
+     * @param corePoolSize The initial pool sizePoolSize
+     * @param maximumPoolSize The maximum pool size
+     * @param keepAliveTime Default duration for a thread
+     * @param unit Time unit used for the keepAlive value
+     * @param threadFactory The factory used to create threads
+     * @param eventQueueHandler The queue used to store events
+     */
+    public OrderedThreadPoolExecutor(int corePoolSize, int maximumPoolSize, long keepAliveTime, TimeUnit unit,
+                                     ThreadFactory threadFactory, IoEventQueueHandler eventQueueHandler) {
+        this(corePoolSize, maximumPoolSize, keepAliveTime, unit, threadFactory, eventQueueHandler, null);
     }
 
     /**
@@ -179,9 +185,10 @@ public class OrderedThreadPoolExecutor extends ThreadPoolExecutor {
      * @param unit Time unit used for the keepAlive value
      * @param threadFactory The factory used to create threads
      * @param eventQueueHandler The queue used to store events
+     * @param comparator Determines session priority
      */
     public OrderedThreadPoolExecutor(int corePoolSize, int maximumPoolSize, long keepAliveTime, TimeUnit unit,
-            ThreadFactory threadFactory, IoEventQueueHandler eventQueueHandler) {
+            ThreadFactory threadFactory, IoEventQueueHandler eventQueueHandler, Comparator<IoEvent> comparator) {
         // We have to initialize the pool with default values (0 and 1) in order to
         // handle the exception in a better way. We can't add a try {} catch() {}
         // around the super() call.
@@ -205,6 +212,15 @@ public class OrderedThreadPoolExecutor extends ThreadPoolExecutor {
             this.eventQueueHandler = IoEventQueueHandler.NOOP;
         } else {
             this.eventQueueHandler = eventQueueHandler;
+        }
+
+        // The comparator can be null.
+        this.comparator = comparator;
+
+        if (this.comparator == null) {
+            this.waitingSessions = new LinkedBlockingQueue<>();
+        } else {
+            this.waitingSessions = new PriorityBlockingQueue<>();
         }
     }
 
@@ -378,16 +394,16 @@ public class OrderedThreadPoolExecutor extends ThreadPoolExecutor {
         shutdown();
 
         List<Runnable> answer = new ArrayList<>();
-        IoSession session;
+        FIFOEntry entry;
 
-        while ((session = waitingSessions.poll()) != null) {
-            if (session == EXIT_SIGNAL) {
+        while ((entry = waitingSessions.poll()) != null) {
+            if (entry == EXIT_SIGNAL) {
                 waitingSessions.offer(EXIT_SIGNAL);
                 Thread.yield(); // Let others take the signal.
                 continue;
             }
 
-            SessionTasksQueue sessionTasksQueue = (SessionTasksQueue) session.getAttribute(TASKS_QUEUE);
+            SessionTasksQueue sessionTasksQueue = (SessionTasksQueue) entry.getSession().getAttribute(TASKS_QUEUE);
 
             synchronized (sessionTasksQueue.tasksQueue) {
 
@@ -477,7 +493,7 @@ public class OrderedThreadPoolExecutor extends ThreadPoolExecutor {
             // As the tasksQueue was empty, the task has been executed
             // immediately, so we can move the session to the queue
             // of sessions waiting for completion.
-            waitingSessions.offer(session);
+            waitingSessions.offer(new FIFOEntry(event, comparator));
         }
 
         addWorkerIfNecessary();
@@ -705,7 +721,7 @@ public class OrderedThreadPoolExecutor extends ThreadPoolExecutor {
         }
 
         private IoSession fetchSession() {
-            IoSession session = null;
+            FIFOEntry entry = null;
             long currentTime = System.currentTimeMillis();
             long deadline = currentTime + getKeepAliveTime(TimeUnit.MILLISECONDS);
             
@@ -718,10 +734,10 @@ public class OrderedThreadPoolExecutor extends ThreadPoolExecutor {
                     }
 
                     try {
-                        session = waitingSessions.poll(waitTime, TimeUnit.MILLISECONDS);
+                        entry = waitingSessions.poll(waitTime, TimeUnit.MILLISECONDS);
                         break;
                     } finally {
-                        if (session != null) {
+                        if (entry != null) {
                             currentTime = System.currentTimeMillis();
                         }
                     }
@@ -731,7 +747,11 @@ public class OrderedThreadPoolExecutor extends ThreadPoolExecutor {
                 }
             }
             
-            return session;
+            if (entry != null)
+            {
+                return entry.getSession();
+            }
+            return null;
         }
 
         private void runTasks(SessionTasksQueue sessionTasksQueue) {
@@ -781,5 +801,65 @@ public class OrderedThreadPoolExecutor extends ThreadPoolExecutor {
 
         /** The current task state */
         private boolean processingCompleted = true;
+    }
+
+    /**
+     * A class used to preserve first-in-first-out order of sessions that have
+     * equal priority.
+     */
+    static class FIFOEntry implements Comparable<FIFOEntry>
+    {
+        final long seqNum;
+        final IoEvent event;
+        final Comparator<IoEvent> comparator;
+
+        public FIFOEntry(IoEvent event, Comparator<IoEvent> comparator) {
+            if (event == null) {
+                throw new IllegalArgumentException("event");
+            }
+            seqNum = SEQ.getAndIncrement();
+            this.event = event;
+            this.comparator = comparator;
+        }
+
+        public IoEvent getEvent() {
+            return event;
+        }
+
+        public IoSession getSession() {
+            return event.getSession();
+        }
+
+        public int compareTo(FIFOEntry other) {
+            if (other == this) {
+                return 0;
+            }
+
+            if (other.event == this.event) {
+                return 0;
+            }
+
+            // An exit signal should always be preferred.
+            if (this == EXIT_SIGNAL) {
+                return -1;
+            }
+            if (other == EXIT_SIGNAL) {
+                return 1;
+            }
+
+            int res = 0;
+
+            // If there's a comparator, use it to prioritise events.
+            if (comparator != null) {
+                res = comparator.compare(event, other.event);
+            }
+
+            // FIFO tiebreaker.
+            if (res == 0) {
+                res = (seqNum < other.seqNum ? -1 : 1);
+            }
+
+            return res;
+        }
     }
 }
