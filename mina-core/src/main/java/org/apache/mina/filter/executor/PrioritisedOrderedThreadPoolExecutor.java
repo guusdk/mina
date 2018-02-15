@@ -58,7 +58,7 @@ public class PrioritisedOrderedThreadPoolExecutor extends ThreadPoolExecutor
     /** A default value for the KeepAlive delay */
     private static final int DEFAULT_KEEP_ALIVE = 30;
 
-    private final FIFOEntry EXIT_SIGNAL;
+    private static final FIFOEntry EXIT_SIGNAL = new FIFOEntry( new IoEvent( IoEventType.CLOSE, new DummySession(), null), null );
 
     /** A key stored into the session's attribute for the event tasks being queued */
     private static final AttributeKey TASKS_QUEUE = new AttributeKey( PrioritisedOrderedThreadPoolExecutor.class, "tasksQueue");
@@ -80,7 +80,7 @@ public class PrioritisedOrderedThreadPoolExecutor extends ThreadPoolExecutor
 
     private final Comparator<IoEvent> comparator;
 
-    private final AtomicLong seq = new AtomicLong( 0 );
+    private static final AtomicLong seq = new AtomicLong( 0 );
 
     /**
      * Creates a default ThreadPool, with default values :
@@ -193,8 +193,6 @@ public class PrioritisedOrderedThreadPoolExecutor extends ThreadPoolExecutor
         if ((maximumPoolSize == 0) || (maximumPoolSize < corePoolSize)) {
             throw new IllegalArgumentException( "maximumPoolSize: " + maximumPoolSize);
         }
-
-        EXIT_SIGNAL = new FIFOEntry( new IoEvent( IoEventType.CLOSE, new DummySession(), null) );
 
         // Now, we can setup the pool sizes
         super.setCorePoolSize(corePoolSize);
@@ -481,7 +479,7 @@ public class PrioritisedOrderedThreadPoolExecutor extends ThreadPoolExecutor
             // As the tasksQueue was empty, the task has been executed
             // immediately, so we can move the session to the queue
             // of sessions waiting for completion.
-            waitingSessions.offer(new FIFOEntry(event));
+            waitingSessions.offer(new FIFOEntry(event, comparator));
         }
 
         addWorkerIfNecessary();
@@ -796,17 +794,19 @@ public class PrioritisedOrderedThreadPoolExecutor extends ThreadPoolExecutor
      * A class used to preserve first-in-first-out order of sessions that have
      * equal priority.
      */
-    class FIFOEntry implements Comparable<FIFOEntry>
+    static class FIFOEntry implements Comparable<FIFOEntry>
     {
         final long seqNum;
         final IoEvent event;
+        final Comparator comparator;
 
-        public FIFOEntry(IoEvent event) {
+        public FIFOEntry(IoEvent event, Comparator comparator ) {
             if (event == null) {
                 throw new IllegalArgumentException( "event");
             }
             seqNum = seq.getAndIncrement();
             this.event = event;
+            this.comparator = comparator;
         }
 
         public IoEvent getEvent() {
