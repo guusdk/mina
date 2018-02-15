@@ -600,10 +600,6 @@ public class PrioritisedOrderedThreadPoolExecutor extends ThreadPoolExecutor
         throw new UnsupportedOperationException();
     }
 
-    public Queue<FIFOEntry> getWaitingSessions() {
-        return this.waitingSessions;
-    }
-
     /**
      * {@inheritDoc}
      */
