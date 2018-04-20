@@ -49,6 +49,9 @@ public class PrioritisedOrderedThreadPoolExecutor extends ThreadPoolExecutor
     /** A logger for this class (commented as it breaks MDCFlter tests) */
     private static final Logger LOGGER = LoggerFactory.getLogger( PrioritisedOrderedThreadPoolExecutor.class);
 
+    /** Generates sequential identifiers that ensure FIFO behavior. */
+    private static final AtomicLong seq = new AtomicLong( 0 );
+
     /** A default value for the initial pool size */
     private static final int DEFAULT_INITIAL_THREAD_POOL_SIZE = 0;
 
@@ -79,8 +82,6 @@ public class PrioritisedOrderedThreadPoolExecutor extends ThreadPoolExecutor
     private final IoEventQueueHandler eventQueueHandler;
 
     private final Comparator<IoSession> comparator;
-
-    private static final AtomicLong seq = new AtomicLong( 0 );
 
     /**
      * Creates a default ThreadPool, with default values :
