@@ -99,6 +99,19 @@ public class PrioritisedOrderedThreadPoolExecutor extends ThreadPoolExecutor
     /**
      * Creates a default ThreadPool, with default values :
      * - minimum pool size is 0
+     * - maximum pool size is 16
+     * - keepAlive set to 30 seconds
+     * - A default ThreadFactory
+     * - All events are accepted
+     */
+    public PrioritisedOrderedThreadPoolExecutor(Comparator<IoSession> comparator) {
+        this( DEFAULT_INITIAL_THREAD_POOL_SIZE, DEFAULT_MAX_THREAD_POOL, DEFAULT_KEEP_ALIVE, TimeUnit.SECONDS, Executors
+        .defaultThreadFactory(), null, comparator);
+    }
+
+    /**
+     * Creates a default ThreadPool, with default values :
+     * - minimum pool size is 0
      * - keepAlive set to 30 seconds
      * - A default ThreadFactory
      * - All events are accepted
@@ -110,6 +123,19 @@ public class PrioritisedOrderedThreadPoolExecutor extends ThreadPoolExecutor
         .defaultThreadFactory(), null, null);
     }
 
+    /**
+     * Creates a default ThreadPool, with default values :
+     * - minimum pool size is 0
+     * - keepAlive set to 30 seconds
+     * - A default ThreadFactory
+     * - All events are accepted
+     *
+     * @param maximumPoolSize The maximum pool size
+     */
+    public PrioritisedOrderedThreadPoolExecutor( int maximumPoolSize, Comparator<IoSession> comparator) {
+        this( DEFAULT_INITIAL_THREAD_POOL_SIZE, maximumPoolSize, DEFAULT_KEEP_ALIVE, TimeUnit.SECONDS, Executors
+        .defaultThreadFactory(), null, comparator);
+    }
     /**
      * Creates a default ThreadPool, with default values :
      * - keepAlive set to 30 seconds
