@@ -58,7 +58,7 @@ public class PrioritisedOrderedThreadPoolExecutor extends ThreadPoolExecutor
     /** A default value for the KeepAlive delay */
     private static final int DEFAULT_KEEP_ALIVE = 30;
 
-    private static final FIFOEntry EXIT_SIGNAL = new FIFOEntry( new IoEvent( IoEventType.CLOSE, new DummySession(), null), null );
+    private static final FIFOEntry EXIT_SIGNAL = new FIFOEntry(new DummySession(), null);
 
     /** A key stored into the session's attribute for the event tasks being queued */
     private static final AttributeKey TASKS_QUEUE = new AttributeKey( PrioritisedOrderedThreadPoolExecutor.class, "tasksQueue");
@@ -78,7 +78,7 @@ public class PrioritisedOrderedThreadPoolExecutor extends ThreadPoolExecutor
 
     private final IoEventQueueHandler eventQueueHandler;
 
-    private final Comparator<IoEvent> comparator;
+    private final Comparator<IoSession> comparator;
 
     private static final AtomicLong seq = new AtomicLong( 0 );
 
@@ -179,7 +179,7 @@ public class PrioritisedOrderedThreadPoolExecutor extends ThreadPoolExecutor
      */
     public PrioritisedOrderedThreadPoolExecutor( int corePoolSize, int maximumPoolSize, long keepAliveTime, TimeUnit unit,
                                                  ThreadFactory threadFactory, IoEventQueueHandler eventQueueHandler,
-                                                 Comparator<IoEvent> comparator) {
+                                                 Comparator<IoSession> comparator) {
         // We have to initialize the pool with default values (0 and 1) in order to
         // handle the exception in a better way. We can't add a try {} catch() {}
         // around the super() call.
@@ -485,7 +485,7 @@ public class PrioritisedOrderedThreadPoolExecutor extends ThreadPoolExecutor
             // As the tasksQueue was empty, the task has been executed
             // immediately, so we can move the session to the queue
             // of sessions waiting for completion.
-            waitingSessions.offer(new FIFOEntry(event, comparator));
+            waitingSessions.offer(new FIFOEntry(session, comparator));
         }
 
         addWorkerIfNecessary();
@@ -803,24 +803,20 @@ public class PrioritisedOrderedThreadPoolExecutor extends ThreadPoolExecutor
     static class FIFOEntry implements Comparable<FIFOEntry>
     {
         final long seqNum;
-        final IoEvent event;
-        final Comparator comparator;
+        final IoSession session;
+        final Comparator<IoSession> comparator;
 
-        public FIFOEntry(IoEvent event, Comparator comparator ) {
-            if (event == null) {
-                throw new IllegalArgumentException( "event");
+        public FIFOEntry(IoSession session, Comparator<IoSession> comparator ) {
+            if (session == null) {
+                throw new IllegalArgumentException("session");
             }
             seqNum = seq.getAndIncrement();
-            this.event = event;
+            this.session = session;
             this.comparator = comparator;
         }
 
-        public IoEvent getEvent() {
-            return event;
-        }
-
         public IoSession getSession() {
-            return event.getSession();
+            return session;
         }
 
         public int compareTo(FIFOEntry other) {
@@ -828,7 +824,7 @@ public class PrioritisedOrderedThreadPoolExecutor extends ThreadPoolExecutor
                 return 0;
             }
 
-            if ( other.event == this.event ) {
+            if ( other.session == this.session ) {
                 return 0;
             }
 
@@ -846,7 +842,7 @@ public class PrioritisedOrderedThreadPoolExecutor extends ThreadPoolExecutor
 
             // If there's a comparator, use it to prioritise events.
             if (comparator != null) {
-                res = comparator.compare(event, other.event);
+                res = comparator.compare(session, other.session);
             }
 
             // FIFO tiebreaker.
